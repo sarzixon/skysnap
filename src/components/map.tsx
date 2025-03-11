@@ -1,114 +1,103 @@
-import { useEffect, useState } from "react";
-import Map from "ol/map";
-import View from "ol/view";
-import TileLayer from "ol/layer/tile";
-import OSM from "ol/source/osm";
+import { useEffect, useRef, useState } from 'react';
+import { Map, View } from 'ol';
+import { ImageTile, OSM } from 'ol/source';
+import { Tile as TileLayer } from 'ol/layer';
+import TileGrid from 'ol/tilegrid/TileGrid';
+import proj4 from 'proj4';
+import { register } from 'ol/proj/proj4';
+import { fromLonLat, get as getProjection, transformExtent } from 'ol/proj';
+
 import "ol/ol.css";
-import ImageTile from "ol/source/ImageTile";
-import { fromLonLat, Projection, toLonLat, transform } from "ol/proj";
-import { TileGrid } from "ol/tilegrid";
-import { XYZ } from "ol/source";
+import { LayerMeta } from '../lib/types';
 
-// default to EPSG:3857
+// import lercWasm from "../../public/lerc-wasm.wasm";
 
-type LayerMetadata = {
-    maxX: number,
-    maxY: number,
-    minX: number,
-    minY: number,
-    resolutions: number[],
-    tileSize: number
-}
+proj4.defs(
+    "EPSG:2176",
+    "+proj=tmerc +lat_0=0 +lon_0=15 +k=0.999923 +x_0=5500000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs"
+);
+register(proj4);
+const proj2176 = getProjection('EPSG:2176');
 
-export default function MapComponent() {
-    const [metadata, setMetadata] = useState<LayerMetadata | null>(null);
+// WebAssembly.instantiateStreaming(fetch(lercWasm)).then(
+//     obj => console.log(obj)
+// );
 
-    const polandCoordinates = fromLonLat([19.0, 52.0]);
+const MapComponent = () => {
 
+    const mapRef = useRef<HTMLDivElement>(null);
+    const mapInstance = useRef<Map | null>(null);
+    const [layerMeta, setLayerMeta] = useState<LayerMeta | null>(null);
 
+    // Initial map with OSM layer
     useEffect(() => {
-        async function getRasterData() {
-            const res = await fetch("/data/6/rasters/500/500/metadata.json");
-            // console.log(res);
-            const json = await res.json();
-            // console.log(json);
+        if (!mapRef.current) return;
 
-            if (json) {
-                setMetadata(json as LayerMetadata);
-            }
-
-        }
-        getRasterData();
-
-
-    }, []);
-
-    useEffect(() => {
-        const layers: TileLayer[] = [
-            new TileLayer({
-                source: new OSM(),
-            }),
-        ]
-        console.log(metadata);
-
-        if (metadata) {
-            const { minX, minY, maxX, maxY, resolutions, tileSize } = metadata;
-
-            layers.push(new TileLayer({
-                source: new XYZ({
-                    url: '/data/6/rasters/500/{z}/{x}/{y}.png',
-                    // projection: 'EPSG:2176',
-                })
-                // source: new ImageTile({
-                //     url: "/data/6/rasters/500/500/{z}/{x}/{y}.webp",
-                //     // maxResolution: resolutions[0],
-                //     // tileGrid: new TileGrid({
-                //     //     extent: [minX, minY, maxX, maxY],
-                //     //     resolutions: resolutions,
-                //     //     tileSize: tileSize
-                //     // })
-                //     tileSize: 512,
-                //     projection: 'EPSG:2176'
-                // }),
-                // extent: [minX, minY, maxX, maxY]
-
-            }))
-        }
-
-        const map = new Map({
-            target: "map",
-            layers,
+        mapInstance.current = new Map({
+            target: mapRef.current,
+            layers: [new TileLayer({ source: new OSM() })],
             view: new View({
-                center: polandCoordinates,
-                zoom: 7,
-            }),
+                center: fromLonLat([19.1451, 51.9194]),
+                zoom: 7
+            })
         });
 
-        map.on('moveend', () => {
-            const view = map.getView();
-            const center = view.getCenter();
-            const zoom = view.getZoom();
-            const lonLat = toLonLat(center!);
-            const decimal = `Lon: ${lonLat[0].toFixed(6)}, Lat: ${lonLat[1].toFixed(6)}`;
-            const resolution = view.getResolution();
-            console.log(decimal);
-            console.log(`Zoom: ${zoom}`);
-            console.log(`Resolution: ${resolution}`);
-
+        mapInstance.current.on('error', (e) => {
+            console.log('error occured!', e);
 
         })
 
         return () => {
-            map.setTarget(undefined);
+            if (mapInstance.current) {
+                mapInstance.current.setTarget(undefined);
+            }
         };
-    }, [metadata]);
+    }, []);
 
-    return (
-        <>
-            <div id="map" style={{
-                width: "100%",
-                height: "100%",
-            }}></div>
-        </>
-    );
+    // Pobierz metadane i dodaj warstwę rastrową
+    useEffect(() => {
+        const fetchMetadata = async () => {
+            const res = await fetch("/data/6/rasters/500/500/metadata.json");
+            const json = await res.json();
+            setLayerMeta(json);
+        };
+
+        fetchMetadata();
+    }, []);
+
+    // Dodaj warstwę rastrową gdy metadane są dostępne
+    useEffect(() => {
+        if (!layerMeta || !mapInstance.current) return;
+
+        const rasterLayer = new TileLayer({
+            source: new ImageTile({
+                url: '/data/6/rasters/500/500/{z}/{x}/{y}.webp',
+                projection: proj2176!,
+                tileGrid: new TileGrid({
+                    origin: [layerMeta.minX, layerMeta.maxY],
+                    resolutions: layerMeta.resolutions,
+                    tileSize: [layerMeta.tileSize, layerMeta.tileSize],
+                    extent: [layerMeta.minX, layerMeta.minY, layerMeta.maxX, layerMeta.maxY]
+                }),
+            }),
+        });
+
+        mapInstance.current.addLayer(rasterLayer);
+
+        const wgs84Extent = transformExtent(
+            [layerMeta.minX, layerMeta.minY, layerMeta.maxX, layerMeta.maxY],
+            'EPSG:2176',
+            'EPSG:3857'
+        );
+
+        mapInstance.current.getView().fit(
+            wgs84Extent,
+            { padding: [50, 50, 50, 50] }
+        );
+
+    }, [layerMeta]);
+
+    return <div ref={mapRef} style={{ width: '100%', height: '100%' }} />;
 };
+
+export default MapComponent;
