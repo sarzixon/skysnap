@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { Map, View } from 'ol';
-import { ImageTile, OSM } from 'ol/source';
+import { ImageTile, OSM, XYZ } from 'ol/source';
 import { Tile as TileLayer } from 'ol/layer';
 import TileGrid from 'ol/tilegrid/TileGrid';
 import proj4 from 'proj4';
 import { register } from 'ol/proj/proj4';
 import { fromLonLat, get as getProjection, transformExtent } from 'ol/proj';
+import { load, isLoaded, decode } from "lerc";
 
 import "ol/ol.css";
-import { LayerMeta } from '../lib/types';
-
-// import lercWasm from "../../public/lerc-wasm.wasm";
+import { ElevationLayerMeta, elevationLayerMetaSchema, LayerMeta, layerMetaSchema } from '../lib/types';
+import { useLayerMeta } from '../lib/hooks/useLayerMeta';
+import { useMap } from '../lib/hooks/useMap';
+import { asImageLike } from 'ol/DataTile';
 
 proj4.defs(
     "EPSG:2176",
@@ -19,53 +21,86 @@ proj4.defs(
 register(proj4);
 const proj2176 = getProjection('EPSG:2176');
 
-// WebAssembly.instantiateStreaming(fetch(lercWasm)).then(
-//     obj => console.log(obj)
-// );
 
+// Lerc.
 const MapComponent = () => {
 
-    const mapRef = useRef<HTMLDivElement>(null);
-    const mapInstance = useRef<Map | null>(null);
-    const [layerMeta, setLayerMeta] = useState<LayerMeta | null>(null);
 
-    // Initial map with OSM layer
+    const { mapRef, mapInstance } = useMap();
+    const { loading, data: layerMeta, error } = useLayerMeta<LayerMeta>("/data/6/rasters/500/500/metadata.json", layerMetaSchema);
+    const { loading: loadingElevation, data: elevationData, error: elevationError } = useLayerMeta<ElevationLayerMeta>("/data/6/rasters/499/499/metadata.json", elevationLayerMetaSchema);
+    const [isLercLoaded, setIsLercLoaded] = useState(false);
+
     useEffect(() => {
-        if (!mapRef.current) return;
+        async function loadLerc() {
+            try {
+                await load({
+                    locateFile(wasmFileName, scriptDir) {
+                        return 'lerc-wasm.wasm';
+                    },
+                });
 
-        mapInstance.current = new Map({
-            target: mapRef.current,
-            layers: [new TileLayer({ source: new OSM() })],
-            view: new View({
-                center: fromLonLat([19.1451, 51.9194]),
-                zoom: 7
+
+                setIsLercLoaded(isLoaded());
+            } catch (error) {
+                setIsLercLoaded(false);
+            }
+        }
+        loadLerc();
+    }, []);
+
+    useEffect(() => {
+        if (!mapInstance.current || !elevationData || !isLercLoaded) return;
+
+        const generateElevationTile = async (z: number, x: number, y: number) => {
+            const response = await fetch(`/data/6/rasters/499/499/${z}/${x}/${y}.lerc`);
+            const arrayBuffer = await response.arrayBuffer();
+            const result = decode(arrayBuffer);
+
+            const pixels = result.pixels[0];
+            const { minValue, maxValue } = result.statistics[0];
+            const scale = 255 / (maxValue - minValue);
+
+            const imageData = new Uint8ClampedArray(result.width * result.height * 4);
+            for (let i = 0; i < pixels.length; i++) {
+                const value = Math.round((pixels[i] - minValue) * scale);
+                const idx = i * 4;
+                imageData[idx] = value;
+                imageData[idx + 1] = value;
+                imageData[idx + 2] = value;
+                imageData[idx + 3] = 255;
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = result.width;
+            canvas.height = result.height;
+            const ctx = canvas.getContext('2d')!;
+            ctx.putImageData(new ImageData(imageData, result.width, result.height), 0, 0);
+
+            return canvas;
+        }
+
+        const source = new ImageTile({
+            // url: '/data/6/rasters/499/499/{z}/{x}/{y}.lerc',
+            projection: proj2176!,
+            loader: generateElevationTile,
+            tileGrid: new TileGrid({
+                origin: [elevationData.minX, elevationData.maxY],
+                resolutions: elevationData.resolutions,
+                tileSize: [elevationData.tileSize, elevationData.tileSize],
+                extent: [elevationData.minX, elevationData.minY, elevationData.maxX, elevationData.maxY]
             })
-        });
-
-        mapInstance.current.on('error', (e) => {
-            console.log('error occured!', e);
-
         })
 
-        return () => {
-            if (mapInstance.current) {
-                mapInstance.current.setTarget(undefined);
-            }
-        };
-    }, []);
+        const elevationLayer = new TileLayer({
+            source
+        });
+        // elevationLayer
 
-    // Pobierz metadane i dodaj warstwę rastrową
-    useEffect(() => {
-        const fetchMetadata = async () => {
-            const res = await fetch("/data/6/rasters/500/500/metadata.json");
-            const json = await res.json();
-            setLayerMeta(json);
-        };
+        mapInstance.current.addLayer(elevationLayer);
 
-        fetchMetadata();
-    }, []);
+    }, [isLercLoaded, elevationData]);
 
-    // Dodaj warstwę rastrową gdy metadane są dostępne
     useEffect(() => {
         if (!layerMeta || !mapInstance.current) return;
 
@@ -90,6 +125,7 @@ const MapComponent = () => {
             'EPSG:3857'
         );
 
+
         mapInstance.current.getView().fit(
             wgs84Extent,
             { padding: [50, 50, 50, 50] }
@@ -97,7 +133,10 @@ const MapComponent = () => {
 
     }, [layerMeta]);
 
-    return <div ref={mapRef} style={{ width: '100%', height: '100%' }} />;
+    return <>
+        <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
+        <div id="test"></div>
+    </>;
 };
 
 export default MapComponent;
