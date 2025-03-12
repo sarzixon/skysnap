@@ -11,11 +11,13 @@ import GeoJSON from 'ol/format/GeoJSON.js';
 import VectorSource from 'ol/source/Vector';
 
 import "ol/ol.css";
-import { CreateRasterLayerParams, ElevationLayerMeta, elevationLayerMetaSchema, GeoJsonResponse, geojsonResponseSchema, LayerMeta, layerMetaSchema } from '../lib/types';
+import { CreateRasterLayerParams, ElevationLayerMeta, elevationLayerMetaSchema, GeoJsonResponse, geojsonResponseSchema, LayerMeta, layerMetaSchema, VectorsResponse, vectorsResponseSchema } from '../lib/types';
 import { useLayerMeta } from '../lib/hooks/useLayerMeta';
 import { useMap } from '../lib/hooks/useMap';
 import { useLerc } from '../lib/hooks/useLerc';
 import { generateElevationTile } from '../lib/utils';
+import { Feature } from 'ol';
+import { Geometry } from 'ol/geom';
 
 proj4.defs(
     "EPSG:2176",
@@ -30,6 +32,7 @@ const MapComponent = () => {
     const { data: elevationData } = useLayerMeta<ElevationLayerMeta>("/data/6/rasters/499/499/metadata.json", elevationLayerMetaSchema);
     // TODO: better typing?
     const { data: geojsonData } = useLayerMeta<GeoJsonResponse>("/data/6/vectors/2472/2472.geojson", geojsonResponseSchema);
+    const { data: vectorsData } = useLayerMeta<VectorsResponse>("/data/vectors_response.json", vectorsResponseSchema);
     const { isLercLoaded } = useLerc("lerc-wasm.wasm");
 
     function createRasterLayer({ url, loader, metadata, projection }: CreateRasterLayerParams): TileLayer {
@@ -55,7 +58,7 @@ const MapComponent = () => {
     }
 
     useEffect(() => {
-        if (!layerMeta || !mapInstance.current || !elevationData || !isLercLoaded || !geojsonData) return;
+        if (!layerMeta || !mapInstance.current || !elevationData || !isLercLoaded || !geojsonData || !vectorsData) return;
 
         const rasterLayer = createRasterLayer({
             url: "/data/6/rasters/500/500/{z}/{x}/{y}.webp",
@@ -83,9 +86,29 @@ const MapComponent = () => {
             },
         })
 
+        let features: Feature<Geometry>[] = [];
+        vectorsData.results.forEach(el => {
+            const tmp = new GeoJSON().readFeature(el.geom, {
+                featureProjection: 'EPSG:3857'
+            });
+            Array.isArray(tmp) ? features.concat(tmp) : features.push(tmp);
+        })
+
+        const vectorsLayer = new VectorLayer({
+            source: new VectorSource({
+                features: features
+            }),
+            style: {
+                'stroke-color': 'rgba(27, 231, 78, 0.7)',
+                'stroke-width': 2,
+                'fill-color': 'rgba(54, 27, 231, 0.7)'
+            }
+        })
+
         mapInstance.current.addLayer(rasterLayer);
         mapInstance.current.addLayer(elevationLayer);
         mapInstance.current.addLayer(geoJsonVectorLayer);
+        mapInstance.current.addLayer(vectorsLayer);
 
         const wgs84Extent = transformExtent(
             [layerMeta.minX, layerMeta.minY, layerMeta.maxX, layerMeta.maxY],

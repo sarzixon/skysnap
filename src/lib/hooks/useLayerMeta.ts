@@ -2,9 +2,6 @@ import { useEffect, useState } from "react";
 import { z } from "zod";
 
 export function useLayerMeta<T>(url: string, schema: z.ZodType<T>) {
-    // what i neeed to store:
-    //loading, data, error
-
     const [loading, setLoading] = useState<boolean>(false);
     const [data, setData] = useState<T | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -35,6 +32,7 @@ export function useLayerMeta<T>(url: string, schema: z.ZodType<T>) {
 
             } catch (error) {
                 setError(error instanceof Error ? error.message : "Couldn't fetch layer metadata.");
+                setLoading(false);
             }
         }
 
