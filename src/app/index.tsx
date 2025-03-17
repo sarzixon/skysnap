@@ -1,3 +1,5 @@
+import { css } from "@emotion/react"
+import Button from "@mui/material/Button"
 import { Link } from "react-router"
 
 function App() {
@@ -16,8 +18,22 @@ function App() {
         textAlign: "center",
         fontFamily: "sans-serif, Arial",
       }}>SkySnap - Rekrutacja 2025 - Michał Sarzała</h1>
-      <div>
-        <Link to="geoportal">Go to Geoportal</Link>
+      <div css={css`
+          text-align: center;
+        `}>
+        <Button
+          variant="contained"
+          color="primary"
+          component={Link}
+          to="geoportal"
+          sx={{
+            ":visited": {
+              color: 'initial'
+            }
+          }}
+        >
+          Go to Geoportal
+        </Button>
       </div>
     </>
   )
